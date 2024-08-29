@@ -271,6 +271,63 @@ def download_update(ctx: Context, database: Callable[..., Database], users: tupl
             downloader.verbose_report(report_file)
         backup_database(db, ctx, "download")
 
+# noinspection DuplicatedCode
+@download_app.command("range", short_help="Download a range of submissions.", no_args_is_help=True)
+@argument("submission_id", nargs=2, required=True, type=IntRange(1),
+          callback=lambda _c, _p, v: sorted(set(v), key=v.index))
+@option("--replace", is_flag=True, default=False, show_default=True, help="Replace submissions already in database.")
+@retry_option
+@comments_option
+@option("--content-only", is_flag=True, default=False, help="Do not save footers.")
+@dry_run_option
+@verbose_report_option
+@report_file_option
+@database_exists_option
+@color_option
+@help_option
+@pass_context
+@docstring_format()
+def download_range(ctx: Context, database: Callable[..., Database], submission_id: tuple[int], replace: bool,
+                         retry: int | None, save_comments: bool, content_only: bool, dry_run: bool,
+                         verbose_report: bool, report_file: TextIO | None):
+    """
+    Download single submissions, where {yellow}SUBMISSION_ID{reset} is the ID of the submission.
+
+    If the {yellow}--replace{reset} option is used, database entries will be overwritten with new data (favorites will
+    be maintained).
+
+    The {yellow}--retry{reset} option enables downloads retries for submission files and thumbnails up to 5 retries.
+
+    The {yellow}--no-comments{reset} option disables saving comments.
+
+    The {yellow}--content-only{reset} option disables saving footers.
+
+    The optional {yellow}--dry-run{reset} option disables downloading and saving and simply lists fetched entries
+    """
+    db: Database = database()
+    api: FAAPI = open_api(db, ctx)
+    downloader: Downloader = Downloader(db, api, color=ctx.color, comments=save_comments, content_only=content_only,
+                                        retry=retry or 0, replace=replace, dry_run=dry_run)
+    if not dry_run:
+        backup_database(db, ctx, "predownload")
+        add_history(db, ctx, submission_id=submission_id, replace=replace)
+    try:
+        downloader.download_submissions(range(submission_id[0], submission_id[1]))
+    except KeyboardInterrupt:
+        echo()
+        raise
+    except Unauthorized as err:
+        secho(f"\nError: Unauthorized{(': ' + ' '.join(err.args)) if err.args else ''}", fg="red", color=ctx.color)
+        ctx.exit(1)
+    except RequestException as err:
+        secho(f"\nError: An error occurred during download: {err!r}.", fg="red", color=ctx.color)
+        ctx.exit(1)
+    finally:
+        if report := downloader.verbose_report() if verbose_report else downloader.report():
+            echo(f"\n{report}\n", color=ctx.color)
+        if report_file:
+            downloader.verbose_report(report_file)
+        backup_database(db, ctx, "download")
 
 # noinspection DuplicatedCode
 @download_app.command("submissions", short_help="Download single submissions.", no_args_is_help=True)
@@ -391,6 +448,7 @@ download_app.list_commands = lambda *_: [
     download_login.name,
     download_users.name,
     download_update.name,
+    download_range.name,
     download_submissions.name,
     download_journals.name,
 ]

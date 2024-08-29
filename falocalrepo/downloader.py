@@ -38,6 +38,24 @@ from requests import Response
 from .console.colors import *
 from .console.util import clean_string
 
+import sqlite3
+
+import os 
+dir_path = os.path.dirname(os.path.realpath(__file__))
+
+idsExist = os.path.exists(os.path.join(dir_path, 'ids.db'))
+if idsExist:
+    skipDb = sqlite3.connect(os.path.join(dir_path, 'ids.db'))
+    skipDbCur = skipDb.cursor()
+
+def skip(id_: int) -> bool:
+    if not idsExist:
+        return False
+    skipDbCur.execute("SELECT COUNT(*) from ids where id = ?", (id_,))
+    res = skipDbCur.fetchone()
+    return res[0] == 1
+
+
 filterwarnings("ignore", category=bs4.MarkupResemblesLocatorWarning, module="bs4")
 
 _FolderDownloader = Callable[[str, int | str], tuple[list[SubmissionPartial], str | int]]
@@ -366,6 +384,7 @@ class Downloader:
 
     def download_submission(self, submission_id: int, user_update: bool, favorites: Iterable[str] | None,
                             thumbnail: str, replace: bool = False) -> int:
+        
         self.bar_clear()
         self.bar_message("DOWNLOAD")
         result, err = download_catch(self.api.submission, submission_id)
@@ -376,21 +395,13 @@ class Downloader:
         self.bar_clear()
         self.bar_close("\b")
         self.bar(7)
-        file: bytes | None = self.download_bytes(submission.file_url)
+        file = None
         retry: int = self.retry + 1
-        while file is None and (retry := retry - 1):
-            self.bar_message(f"RETRY {self.retry - retry + 1}", red)
-            self.api.handle_delay()
-            file = self.download_bytes(submission.file_url)
-        self.bar_message(("#" * self.bar_width) if file else "ERROR", green if file else red, always=True)
+       
+        self.bar_message("FOUND", green, always=True)
         self.bar_close("]")
         self.bar(1)
-        thumb: bytes | None = self.download_bytes(submission.thumbnail_url or thumbnail)
-        retry = self.retry + 1
-        while thumb is None and (retry := retry - 1):
-            self.bar_message(f"RETRY {self.retry - retry + 1}", red)
-            self.api.handle_delay()
-            thumb = self.download_bytes(submission.thumbnail_url or thumbnail)
+        thumb = None
         self.db.submissions.save_submission({
             **format_entry(dict(submission), self.db.submissions.columns),
             SubmissionsColumns.FILEURL.name: [submission.file_url],
@@ -406,11 +417,8 @@ class Downloader:
             save_comments(self.db, submissions_table, submission.id, submission.comments,
                           replace=replace, bbcode=self.bbcode)
         self.db.commit()
-        self.bar_message(("#" * self.bar_width) if thumb else "ERROR", green if thumb else red, always=True)
         self.bar_close()
         self.added_submissions += [submission_id]
-        self.file_errors += [] if file else [submission_id]
-        self.thumbnail_errors += [] if thumb else [submission_id]
         return 0
 
     def download_user_folder(self, user: str, folder: str, downloader_entries: Callable[[str, P], tuple[list[T], P]],
@@ -543,10 +551,10 @@ class Downloader:
         modify_checks: list[tuple[Callable[[SubmissionPartial, dict], bool], str]]
 
         if folder == Folder.favorites:
-            modify_checks = [(lambda submission, _: self.db.submissions.add_favorite(submission.id, user),
+            modify_checks = [(lambda submission, _: not skip(submission) and self.db.submissions.add_favorite(submission.id, user),
                               "ADDED FAV")]
         else:
-            modify_checks = [(lambda submission, _: (self.db.submissions.set_user_update(submission.id, True) +
+            modify_checks = [(lambda submission, _: (not skip(submission) and self.db.submissions.set_user_update(submission.id, True) +
                                                      self.db.submissions.set_folder(submission.id, folder)),
                               "UPDATED")]
 
