@@ -385,6 +385,8 @@ class Downloader:
     def download_submission(self, submission_id: int, user_update: bool, favorites: Iterable[str] | None,
                             thumbnail: str, replace: bool = False) -> int:
         
+        download = 'GET_FILES' in os.environ
+        
         self.bar_clear()
         self.bar_message("DOWNLOAD")
         result, err = download_catch(self.api.submission, submission_id)
@@ -395,13 +397,27 @@ class Downloader:
         self.bar_clear()
         self.bar_close("\b")
         self.bar(7)
-        file = None
+        file: bytes | None = None
+
         retry: int = self.retry + 1
-       
+
+        if download:
+            file = self.download_bytes(submission.file_url)
+            while file is None and (retry := retry - 1):
+                self.bar_message(f"RETRY {self.retry - retry + 1}", red)
+                self.api.handle_delay()
+                file = self.download_bytes(submission.file_url)
+        
         self.bar_message("FOUND", green, always=True)
         self.bar_close("]")
         self.bar(1)
         thumb = None
+
+        if download:
+            while thumb is None and (retry := retry - 1):
+                self.bar_message(f"RETRY {self.retry - retry + 1}", red)
+                self.api.handle_delay()
+                thumb = self.download_bytes(submission.thumbnail_url or thumbnail)
         self.db.submissions.save_submission({
             **format_entry(dict(submission), self.db.submissions.columns),
             SubmissionsColumns.FILEURL.name: [submission.file_url],
